@@ -1,8 +1,9 @@
 /* @flow */
 
-import type {ReporterSpinnerSet, Trees, ReporterSpinner} from './types.js';
-import type {AuditMetadata, AuditActionRecommendation, AuditAdvisory, AuditResolution} from '../cli/commands/audit';
+import type {ReporterSpinner, ReporterSpinnerSet, Trees} from './types.js';
+import type {AuditActionRecommendation, AuditAdvisory, AuditMetadata, AuditResolution} from '../cli/commands/audit';
 import BaseReporter from './base-reporter.js';
+import type {ReporterSelectOption} from './types';
 
 export default class JSONReporter extends BaseReporter {
   constructor(opts?: Object) {
@@ -139,6 +140,65 @@ export default class JSONReporter extends BaseReporter {
         this._dump('activityEnd', {id});
       },
     };
+  }
+
+  _readline(): Promise<any> {
+    let inputHandler;
+    const cleanup = () => {
+      process.stdin.read();
+      process.stdin.removeListener('readable', inputHandler);
+    };
+    return new Promise((resolve, reject) => {
+      inputHandler = () => {
+        let chunk: Buffer;
+        let buff: Buffer = Buffer.alloc(0);
+        // Use a loop to make sure we read all available data.
+        while ((chunk = process.stdin.read(1)) !== null) {
+          if (chunk[0] === 10 || chunk[0] === 13) {
+            if (buff.length === 0) {
+              continue;
+            }
+            try {
+              resolve(JSON.parse(buff.toString()));
+            } catch (e) {
+              reject(e);
+            }
+            return;
+          }
+          buff = Buffer.concat([buff, chunk]);
+        }
+      };
+      process.stdin.on('readable', inputHandler);
+    }).then(
+      line => {
+        cleanup();
+        return line;
+      },
+      e => {
+        cleanup();
+        return Promise.reject(e);
+      },
+    );
+  }
+
+  async select(header: string, question: string, options: Array<ReporterSelectOption>): Promise<string> {
+    this._dump('select', {header, question, options}); // header and question is localized
+
+    const line = await this._readline();
+
+    if (line.type !== 'select' || typeof line.answer !== 'number') {
+      return Promise.reject(new Error('Invalid answer type'));
+    }
+    const index = line.answer;
+    if (index <= 0 || index > options.length) {
+      return Promise.reject(new Error('Outside answer range'));
+    }
+    const option = options[line.answer];
+    if (!option) {
+      return Promise.reject(new Error('Invalid choice'));
+    }
+    this._dump('debug', {selected: option});
+    return option.value;
   }
 
   progress(total: number): () => void {
